@@ -1,0 +1,11 @@
+# Competition data, reports, caches and model outputs stay out of Git.
+data/*
+!data/README.md
+*.csv
+*.npz
+*.npy
+*.pt
+*.jsonl
+outputs/
+__pycache__/
+.ipynb_checkpoints/

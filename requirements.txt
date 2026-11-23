@@ -4,3 +4,9 @@ matplotlib
 pydicom
 scipy
 scikit-image
+scikit-learn
+opencv-python
+torch
+torchvision
+medprep-starter[medical] @ git+https://github.com/Z-bros/Med_Im_Prepper.git
+model-adapt[hf] @ git+https://github.com/Z-bros/model-adapt-overcome.git

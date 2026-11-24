@@ -392,8 +392,20 @@ def main(runs, out):
         md += ablation_section(arm_files, gold_y, figs, out,
                                baseline=met["oof_macro_auc"] if met_p and oof_p else None)
 
-    # ------------------------------------------------------------ 8. submission
-    md += [f"## {6 + has16 + has_ablation}. Inference (notebook 15)", ""]
+    # ------------------------------------------- 8. fine-tuning / distillation quality
+    char_files = {"soft": need("11c", "soft_labels_v1.csv"), "folds": need("12", "folds_v1.csv"),
+                  "frozen": need("17", "ablation_frozen_v1.json"),
+                  "log16": need("16", "rsna-knee-16-finetune-2p5d-mil.log"),
+                  "log16r": need("16r", "rsna-knee-16r-finetune-regex-labels.log"),
+                  "hist16": need("16", "history_v1.csv"), "hist16r": need("16r", "history_v1.csv")}
+    has_char = (has_ablation and all(arm_files.values()) and all(char_files.values())
+                and weak is not None and gold_y is not None)
+    if has_char:
+        md += [f"## {6 + has16 + has_ablation}. How well fine-tuning and distillation work", ""]
+        md += characterization_section(arm_files, char_files, weak, gold_y, figs, out)
+
+    # ------------------------------------------------------------ 9. submission
+    md += [f"## {6 + has16 + has_ablation + has_char}. Inference (notebook 15)", ""]
     sub_p = need("15", "submission.csv")
     if not runs.joinpath("15").is_dir():
         md += ["Not run for this report.", ""]
@@ -527,6 +539,226 @@ def ablation_section(arm_files, gold_y, figs, out, baseline=None, n_boot=2000, s
             roc_auc_score(yv[:, j], p[:, j]) if 0 < yv[:, j].sum() < len(yv) else np.nan for j in range(12)]
     md += ["Per target (AUC):", "", fmt_table(per), ""]
     return md
+
+
+def characterization_section(arm_files, files, weak, gold_y, figs, out, n_boot=1000, seed=0):
+    """Teacher -> student quality of the four 2 x 2 arms. 'Teacher' = the labels an arm trained on.
+    Held-out: fold-0 loss (870 studies) scaled between a no-image constant (0) and the teacher (1).
+    Expert-labelled: student vs teacher AUC on the 58, agreement, calibration, error inheritance."""
+    from scipy.stats import rankdata, spearmanr
+
+    arms = list(arm_files)
+    soft = pd.read_csv(files["soft"], dtype={"StudyInstanceUID": str}).set_index("StudyInstanceUID")
+    folds = pd.read_csv(files["folds"], dtype={"StudyInstanceUID": str}).set_index("StudyInstanceUID")
+    w = weak.set_index("StudyInstanceUID")
+    teacher = {"regex": w[[t + "__weak" for t in TARGETS]].set_axis(TARGETS, axis=1), "soft": soft[TARGETS]}
+    # same split as notebooks 16 / 17
+    gold_groups = set(folds.loc[folds["is_gold"].eq(1), "group"])
+    ok = folds["is_gold"].eq(0) & ~folds["group"].isin(gold_groups)
+    tr, va = folds.index[ok & folds["fold"].ne(0)], folds.index[ok & folds["fold"].eq(0)]
+
+    def bce(p, y):
+        p = np.clip(p, 1e-6, 1 - 1e-6)
+        return float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
+
+    ref = {}  # label source -> (teacher entropy = perfect copy, no-image constant)
+    for src, lab in teacher.items():
+        y = lab.loc[va].to_numpy()
+        ref[src] = (bce(y, y), bce(np.broadcast_to(lab.loc[tr].to_numpy().mean(0), y.shape), y))
+    captured = lambda v, src: (ref[src][1] - v) / (ref[src][1] - ref[src][0])
+    avg3 = lambda p: float(re.search(r"'avg_top3': ([0-9.]+)", p.read_text(errors="replace")).group(1))
+    frozen = json.loads(files["frozen"].read_text())
+    val_bce = {("frozen", "regex"): frozen["regex"]["val_bce"], ("frozen", "soft"): frozen["soft"]["val_bce"],
+               ("fine-tuned", "regex"): avg3(files["log16r"]), ("fine-tuned", "soft"): avg3(files["log16"])}
+
+    ids = gold_y.index
+    G = gold_y.loc[:, TARGETS].to_numpy()
+    P = {}
+    for a, f in arm_files.items():
+        d = pd.read_csv(f, dtype={"StudyInstanceUID": str}).set_index("StudyInstanceUID")
+        P[a] = d.loc[ids, [t + "__pred" for t in TARGETS]].to_numpy()
+    Tch = {s: lab.loc[ids].to_numpy() for s, lab in teacher.items()}
+
+    def aucs(p, i):
+        return np.array([roc_auc_score(G[i, j], p[i, j]) if 0 < G[i, j].sum() < len(i) else np.nan
+                         for j in range(len(TARGETS))])
+
+    rng = np.random.default_rng(seed)
+    boots = [rng.integers(0, len(G), len(G)) for _ in range(n_boot)]
+    full = np.arange(len(G))
+    kept = {}
+    for a in arms:
+        f = lambda i, a=a: (np.nanmean(aucs(P[a], i)) - .5) / (np.nanmean(aucs(Tch[a[1]], i)) - .5)
+        bs = [f(i) for i in boots]
+        kept[a] = (f(full), np.percentile(bs, 2.5), np.percentile(bs, 97.5))
+
+    rows = []
+    for a in arms:
+        t = Tch[a[1]]
+        rows.append({"arm": ARM_LABEL[a], "signal captured (870)": captured(val_bce[a], a[1]),
+                     "teacher AUC": np.nanmean(aucs(t, full)), "student AUC": np.nanmean(aucs(P[a], full)),
+                     "skill kept [95% CI]": f"{kept[a][0]:.2f} [{kept[a][1]:.2f}, {kept[a][2]:.2f}]",
+                     "agreement": np.mean([spearmanr(P[a][:, j], t[:, j])[0] for j in range(len(TARGETS))]),
+                     "Brier": float(((P[a] - G) ** 2).mean())})
+
+    def resid(x, g):  # ranks of x with the expert label regressed out
+        r = rankdata(x)
+        X = np.c_[np.ones_like(g, dtype=float), g]
+        return r - X @ np.linalg.lstsq(X, r, rcond=None)[0]
+
+    def pcorr(p, q):
+        return float(np.mean([np.corrcoef(resid(p[:, j], G[:, j]), resid(q[:, j], G[:, j]))[0, 1]
+                              for j in range(len(TARGETS))]))
+
+    inh = {src: {t: pcorr(P[("fine-tuned", src)], Tch[t]) for t in Tch} for src in Tch}
+    tt = pcorr(Tch["regex"], Tch["soft"])
+
+    # ---- figure 09: transfer summary + training dynamics
+    fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.6), gridspec_kw={"width_ratios": [1, 1, 1.25]})
+    col = {"frozen": MUTED, "fine-tuned": BLUE}
+    for ax, title, vals, ylab in (
+            (axes[0], "Teacher signal captured\n(870 held-out studies)",
+             {a: captured(val_bce[a], a[1]) for a in arms}, "share of learnable signal (0 = no image, 1 = teacher)"),
+            (axes[1], "Teacher skill kept\n(58 expert-labelled studies)", {a: kept[a][0] for a in arms},
+             "(student AUC - 0.5) / (teacher AUC - 0.5)")):
+        for m in ("frozen", "fine-tuned"):
+            ks = [(m, "regex"), (m, "soft")]
+            x, y = np.array([0, 1]), np.array([vals[k] for k in ks])
+            ax.plot(x, y, color=col[m], linewidth=2, zorder=2)
+            if ax is axes[1]:
+                err = [y - np.array([kept[k][1] for k in ks]), np.array([kept[k][2] for k in ks]) - y]
+                ax.errorbar(x, y, yerr=err, fmt="none", ecolor=col[m], elinewidth=2, alpha=0.5, zorder=1)
+            ax.plot(x, y, "o", color=col[m], markersize=8, markeredgecolor=SURFACE, markeredgewidth=1.5,
+                    zorder=3, label=m)
+            for xi, yi in zip(x, y):
+                ax.annotate(f"{yi:.2f}", (xi, yi), xytext=(-10 if xi == 0 else 10, 0), textcoords="offset points",
+                            ha="right" if xi == 0 else "left", va="center", fontsize=8, color=INK2)
+        ax.set_xticks([0, 1], ["regex labels", "LLM soft labels"])
+        ax.set_xlim(-0.5, 1.5)
+        ax.set_ylim(0, 1.1)
+        ax.axhline(1, color=INK, linewidth=1, linestyle=":")
+        ax.text(1.48, 1.015, "teacher", ha="right", va="bottom", fontsize=8, color=INK2)
+        ax.set_ylabel(ylab, fontsize=8)
+        ax.set_title(title, loc="left")
+    axes[0].legend(loc="center left", fontsize=8)
+    ax = axes[2]
+    for name, hp, src, ls in (("fine-tuned, soft (16)", files["hist16"], "soft", "-"),
+                              ("fine-tuned, regex (16r)", files["hist16r"], "regex", "--")):
+        h = pd.read_csv(hp)
+        for c, alpha in (("val_bce", 1.0), ("train_bce", 0.35)):
+            ax.plot(h["epoch"], captured(h[c], src), ls, color=BLUE, alpha=alpha, linewidth=2,
+                    marker="o" if c == "val_bce" else None, markersize=4,
+                    label=f"{name}, {'held-out' if c == 'val_bce' else 'train'}")
+    for a, ls, va_ in ((("frozen", "soft"), "-", "bottom"), (("frozen", "regex"), "--", "top")):
+        v = captured(val_bce[a], a[1])
+        ax.axhline(v, color=MUTED, linestyle=ls, linewidth=1.2)
+        ax.text(ax.get_xlim()[1], v, f"frozen, {a[1]}", va=va_, ha="right", fontsize=7, color=INK2)
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("share of learnable signal", fontsize=8)
+    ax.set_title("Fine-tuning dynamics: held-out plateaus\nafter epoch 5, train keeps rising", loc="left")
+    ax.legend(fontsize=7, loc="upper left")
+    ax.set_ylim(0, 0.75)
+    fig.tight_layout()
+    fig.savefig(figs / "09_transfer_quality.png")
+    plt.close(fig)
+
+    # ---- figure 10: per-finding dumbbells
+    A = {a: aucs(P[a], full) for a in arms}
+    At = {s: aucs(Tch[s], full) for s in Tch}
+    order = np.argsort(At["soft"])
+    y = np.arange(len(TARGETS))
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.6), sharey=True)
+    for ax, title, a, b, labs in (
+            (axes[0], "Fine-tuning (LLM soft labels): frozen -> fine-tuned", ("frozen", "soft"),
+             ("fine-tuned", "soft"), ("frozen", "fine-tuned")),
+            (axes[1], "Distillation (fine-tuned model): regex -> LLM soft labels", ("fine-tuned", "regex"),
+             ("fine-tuned", "soft"), ("regex labels", "LLM soft labels"))):
+        va_, vb = A[a][order], A[b][order]
+        ax.hlines(y, np.minimum(va_, vb), np.maximum(va_, vb), color=GRID, linewidth=3, zorder=1)
+        if a[0] == "frozen":
+            ax.plot(va_, y, "o", color=MUTED, markersize=8, markeredgecolor=SURFACE, markeredgewidth=1.5,
+                    zorder=3, label=labs[0])
+        else:  # hollow = regex labels
+            ax.plot(va_, y, "o", color=BLUE, markersize=8, markerfacecolor=SURFACE, markeredgewidth=1.8,
+                    zorder=3, label=labs[0])
+        ax.plot(vb, y, "o", color=BLUE, markersize=8, markeredgecolor=SURFACE, markeredgewidth=1.5, zorder=4,
+                label=labs[1])
+        ax.plot(At["soft"][order], y, "|", color=INK, markersize=14, markeredgewidth=2, zorder=2,
+                label="teacher (soft labels vs experts)")
+        for yi, d in zip(y, vb - va_):
+            ax.text(1.065, yi, f"{d:+.2f}", va="center", ha="right", fontsize=8,
+                    color=INK if abs(d) >= 0.05 else MUTED)
+        ax.set_xlim(0.4, 1.07)
+        ax.axvline(0.5, color=MUTED, linewidth=1, linestyle="--")
+        ax.set_xlabel("ROC AUC on the 58 expert-labelled studies (right column: change)")
+        ax.set_title(title, loc="left", pad=24)
+        ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncol=3, fontsize=8, borderaxespad=0.2,
+                  handletextpad=0.3, columnspacing=1.0)
+    axes[0].set_yticks(y, [TARGETS[i] for i in order])
+    fig.tight_layout()
+    fig.savefig(figs / "10_per_finding_ft_distill.png")
+    plt.close(fig)
+
+    FT, FR, FS = ("fine-tuned", "soft"), ("fine-tuned", "regex"), ("frozen", "soft")
+    per = pd.DataFrame({"target": TARGETS, "regex teacher": At["regex"], "soft teacher": At["soft"],
+                        "frozen, soft": A[FS], "fine-tuned, regex": A[FR], "fine-tuned, soft": A[FT],
+                        "fine-tuning gain": A[FT] - A[FS], "distillation gain": A[FT] - A[FR],
+                        "teacher gain": At["soft"] - At["regex"]})
+    beats = [t for t, s, te in zip(TARGETS, A[FT], At["soft"]) if s > te]
+    rho_ft = spearmanr(At["soft"], A[FT] - A[FS])[0]
+    rho_d = spearmanr(At["soft"] - At["regex"], A[FT] - A[FR])[0]
+    h16, h16r = pd.read_csv(files["hist16"]), pd.read_csv(files["hist16r"])
+
+    def dyn(h, src):
+        b = h.loc[h["val_bce"].idxmin()]
+        return (int(b.epoch), captured(b.val_bce, src), captured(h.val_bce.iloc[-1], src),
+                captured(h.train_bce.iloc[-1], src))
+
+    d16, d16r = dyn(h16, "soft"), dyn(h16r, "regex")
+    rr = rows
+    return [
+        "The 2 x 2 says *how much* each method adds; this section asks *how well* each image model "
+        "(the student) reproduces the labels it was trained on (its teacher), and where. No new training: "
+        "every number comes from the four runs of section 7 and the label files.", "",
+        "- **Teacher signal captured** (870 fold-0 studies, never trained on): the held-out loss against the "
+        "teacher, scaled so 0 = a constant per-finding prediction (no image) and 1 = the teacher itself "
+        f"(its entropy: regex {ref['regex'][0]:.3f}, soft {ref['soft'][0]:.3f}). It measures copying the "
+        "teacher, not truth, but uses 15x more studies than the expert set.",
+        "- **Skill kept** (58 expert-labelled studies): (student AUC - 0.5) / (teacher AUC - 0.5), the share "
+        "of the teacher's above-chance skill the image model keeps. 95% bootstrap CI over studies.",
+        "- **Agreement**: mean Spearman correlation between student and teacher, per finding.",
+        "- **Brier**: mean squared error against the expert labels (calibration and accuracy together). "
+        f"Teachers: regex {float(((Tch['regex'] - G) ** 2).mean()):.3f}, "
+        f"soft {float(((Tch['soft'] - G) ** 2).mean()):.3f}.", "",
+        fmt_table(pd.DataFrame(rows)), "",
+        f"![transfer quality]({rel(figs / '09_transfer_quality.png', out)})", "",
+        "**Fine-tuning.** It roughly doubles the teacher signal captured "
+        f"({rr[0]['signal captured (870)']:.2f} -> {rr[2]['signal captured (870)']:.2f} on regex labels, "
+        f"{rr[1]['signal captured (870)']:.2f} -> {rr[3]['signal captured (870)']:.2f} on soft) and raises "
+        f"the skill kept from about {np.mean([kept[a][0] for a in arms[:2]]):.0%} to "
+        f"{np.mean([kept[a][0] for a in arms[2:]]):.0%}. It re-learns the image features rather than "
+        "rescaling them: its per-finding ranking agrees with the frozen model's at only "
+        f"{np.mean([spearmanr(P[FS][:, j], P[FT][:, j])[0] for j in range(12)]):.2f} (Spearman). "
+        f"Both runs peak at epoch {d16[0]} (signal captured: soft {d16[1]:.2f}, regex {d16r[1]:.2f}); "
+        f"afterwards train keeps rising (to {d16[3]:.2f} / {d16r[3]:.2f}) while held-out stays flat "
+        f"({d16[2]:.2f} / {d16r[2]:.2f} at the last epoch): memorisation without much harm.", "",
+        "**Distillation.** Each model captures more of the soft teacher's signal than of the regex teacher's, "
+        "so the LLM probabilities are easier to learn from images. But the student is not a copy: at about "
+        f"{kept[FT][0]:.0%} skill kept its agreement with the teacher is only {rr[3]['agreement']:.2f}, and on "
+        f"{len(beats)} findings ({', '.join(beats)}) it beats its teacher, findings that are visible in the "
+        "image but under-reported. Why the distillation gain is small: with the expert label partialled out, "
+        f"the two teachers' scores correlate at {tt:.2f} (both read the same report), so they pass on nearly "
+        "the same errors. The fine-tuned students follow teacher errors only moderately "
+        f"(regex-trained: {inh['regex']['regex']:.2f} with the regex teacher, {inh['regex']['soft']:.2f} with "
+        f"the soft one; soft-trained: {inh['soft']['regex']:.2f} / {inh['soft']['soft']:.2f}).", "",
+        f"![per finding]({rel(figs / '10_per_finding_ft_distill.png', out)})", "",
+        "Per finding (AUC on the 58; rows of the figure are sorted by the soft teacher's AUC):", "",
+        fmt_table(per), "",
+        f"Fine-tuning gains most where the teacher is strong (Spearman {rho_ft:.2f} between soft-teacher AUC "
+        "and fine-tuning gain over 12 findings) and stalls on thin or subtle findings (Lateral Meniscus, "
+        "PF OA, Synovitis), consistent with the 224 px resolution limit. The distillation gain does not "
+        f"follow the teacher's own gain (Spearman {rho_d:.2f}); its largest moves (MCL, Medial Meniscus, "
+        "Effusion) rest on a handful of the 58 studies and are within noise.", ""]
 
 
 PAGE_CSS = """

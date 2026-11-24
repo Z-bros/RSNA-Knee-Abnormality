@@ -80,10 +80,16 @@ on the frozen model and +0.013 (-0.009 to +0.036) on the fine-tuned one, positiv
 of resamples but not distinguishable from zero with 58 studies. The two gains add up
 (interaction -0.003). Almost all of the gain over the baseline comes from fine-tuning.
 
+How well each model reproduces its teacher (report v2, section 8): fine-tuning raises the share of the
+teacher's skill kept on the 58 from about 58% to 91%, and doubles the teacher signal captured on 870
+held-out studies (0.19 -> 0.34 with soft labels). Distillation stays small because the regex and LLM
+teachers share most of their errors (partial correlation 0.87: both read the same report). The fine-tuned
+model beats its teacher on 5 image-visible findings (Medial OA, Lateral OA, Effusion, Baker's, Contusion).
+
 Caveats: the label source (blend) was chosen on the same 58 studies, and 14 is pooled out of
 fold over five models while 16 is one model scored on studies it never saw. Full write-ups:
 [`reports/baseline-v1/REPORT.pdf`](reports/baseline-v1/REPORT.pdf) (11-14) and
-[`reports/v2/REPORT.pdf`](reports/v2/REPORT.pdf) (11-17, incl. the 2 x 2 ablation), built by `reports/build_report.py`
+[`reports/v2/REPORT.pdf`](reports/v2/REPORT.pdf) (11-17, incl. the 2 x 2 ablation and the fine-tuning / distillation characterization), built by `reports/build_report.py`
 from the Kaggle outputs.
 
 The approach of 11c + 16 (LLM soft labels from the reports, then a fine-tuned 2.5D

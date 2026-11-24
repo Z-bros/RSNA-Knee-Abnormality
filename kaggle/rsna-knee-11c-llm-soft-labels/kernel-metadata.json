@@ -1,0 +1,17 @@
+{
+  "id": "zidanefatuna/rsna-knee-11c-llm-soft-labels",
+  "title": "RSNA Knee 11C Llm Soft Labels",
+  "code_file": "11c-llm-soft-labels.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "zidanefatuna/rsna-knee-11-report-weak-labels"
+  ],
+  "dataset_sources": []
+}

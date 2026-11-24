@@ -1,0 +1,19 @@
+{
+  "id": "zidanefatuna/rsna-knee-14-weak-label-training",
+  "title": "RSNA Knee 14 Weak Label Training",
+  "code_file": "14-weak-label-training.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "zidanefatuna/rsna-knee-11-report-weak-labels",
+    "zidanefatuna/rsna-knee-12-folds",
+    "zidanefatuna/rsna-knee-13-full-preprocessing"
+  ],
+  "dataset_sources": []
+}

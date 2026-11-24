@@ -9,3 +9,9 @@ data/*
 outputs/
 __pycache__/
 .ipynb_checkpoints/
+
+# Kaggle credentials and local run downloads
+kaggle.json
+access_token
+.kaggle/
+runs/

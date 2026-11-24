@@ -1,0 +1,17 @@
+{
+  "id": "zidanefatuna/rsna-knee-11b-llm-report-labels",
+  "title": "RSNA Knee 11B Llm Report Labels",
+  "code_file": "11b-llm-report-labels.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "zidanefatuna/rsna-knee-11-report-weak-labels"
+  ],
+  "dataset_sources": []
+}

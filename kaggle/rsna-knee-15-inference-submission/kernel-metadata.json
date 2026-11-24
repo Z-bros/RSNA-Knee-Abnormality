@@ -1,0 +1,19 @@
+{
+  "id": "zidanefatuna/rsna-knee-15-inference-submission",
+  "title": "RSNA Knee 15 Inference Submission",
+  "code_file": "15-inference-submission.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": false,
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "zidanefatuna/rsna-knee-16-finetune-2p5d-mil"
+  ],
+  "dataset_sources": [
+    "zidanefatuna/medprep-starter-wheel"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "zidanefatuna/rsna-knee-13-full-preprocessing",
+  "title": "RSNA Knee 13 Full Preprocessing",
+  "code_file": "13-full-preprocessing.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": true,
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [],
+  "dataset_sources": []
+}

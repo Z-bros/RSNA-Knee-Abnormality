@@ -1,0 +1,17 @@
+{
+  "id": "zidanefatuna/rsna-knee-12-folds",
+  "title": "RSNA Knee 12 Folds",
+  "code_file": "12-folds.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "zidanefatuna/rsna-knee-11-report-weak-labels"
+  ],
+  "dataset_sources": []
+}

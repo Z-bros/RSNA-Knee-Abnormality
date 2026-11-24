@@ -1,0 +1,19 @@
+{
+  "id": "zidanefatuna/rsna-knee-16r-finetune-regex-labels",
+  "title": "RSNA Knee 16r Finetune Regex Labels",
+  "code_file": "16r-finetune-regex-labels.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "competition_sources": [
+    "rsna-knee-abnormality-detection"
+  ],
+  "kernel_sources": [
+    "zidanefatuna/rsna-knee-11-report-weak-labels",
+    "zidanefatuna/rsna-knee-12-folds",
+    "zidanefatuna/rsna-knee-13-full-preprocessing"
+  ],
+  "dataset_sources": []
+}
